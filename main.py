@@ -1,74 +1,73 @@
 import os
-import network
 import time
-import urequests
-from machine import Pin, ADC
+import requests
+from gpiozero import MCP3008
 from dotenv import load_dotenv
 
-load_dotenv() 
+load_dotenv()
 
 # --- CONFIGURATION ---
-ssid = os.getenv("WIFI_SSID")
-password = os.getenv("WIFI_PASSWORD")
-ip = os.getenv("SERVER_IP")
+SERVER_IP = os.getenv("SERVER_IP")  # IP of Device 2's Pi
+DEVICE_ID = "sensor_node_1"
 
-API_ENDPOINT = f"http://{ip}:{5000}/plant_data"
+API_ENDPOINT = f"http://{SERVER_IP}:5000/plant_data"
 
-soil_moisture_adc = ADC(Pin(26))
-light_sensor_adc = ADC(Pin(27))
-
-def connect_to_wifi():
-    """Connects the Pico W to the specified Wi-Fi network."""
-    wlan = network.WLAN(network.STA_IF)
-    wlan.active(True)
-    wlan.connect(ssid, password)
-
-    max_wait = 15
-    while max_wait > 0:
-        if wlan.status() < 0 or wlan.status() >= 3:
-            break
-        max_wait -= 1
-        print('Waiting for connection...')
-        time.sleep(1)
-
-    if wlan.status() != 3:
-        print(f"Failed to connect to Wi-Fi: Status {wlan.status()}")
-        return False
-    else:
-        print(f'Connected! Pico IP address: {wlan.ifconfig()[0]}')
-        return True
+# --- SENSOR SETUP ---
+soil_moisture_adc = MCP3008(channel=0)  # Screw probes
+red_light_adc = MCP3008(channel=1)      # Red light sensor (photodiode)
+blue_light_adc = MCP3008(channel=2)     # Blue light sensor
+green_light_adc = MCP3008(channel=3)    # Green light sensor
 
 
-def read_soil_moisture():
-    """Reads the 16-bit analog soil moisture value (0 - 65535)."""
-    return soil_moisture_adc.read_u16()
+def read_sensors():
+    """Read all sensor values"""
+    moisture = int(soil_moisture_adc.value * 65535)
+    red_light = int(red_light_adc.value * 65535)
+    blue_light = int(blue_light_adc.value * 65535)
+    green_light = int(green_light_adc.value * 65535)
+    return moisture, red_light, blue_light, green_light
 
-def read_light_level():
-    """Reads the 16-bit analog light sensor value (0 - 65535)."""
-    return light_sensor_adc.read_u16()
 
-def send_data(moisture_value, light_value):
-    """Sends the soil moisture and light readings to the server via HTTP POST."""
+def send_data(moisture, red, blue, green):
+    """Send data to server"""
     data = {
-        "moisture": moisture_value,
-        "light": light_value
+        "device_id": DEVICE_ID,
+        "moisture": moisture,
+        "red_light": red,      # Red light intensity
+        "blue_light": blue,    # Blue light intensity
+        "green_light": green   # Green light intensity
     }
-    
+
     try:
-        response = urequests.post(API_ENDPOINT, json=data)
+        response = requests.post(API_ENDPOINT, json=data, timeout=10)
         if response.status_code == 200:
-            print("Data sent successfully!")
+            print("✓ Data sent successfully!")
+            return True
         else:
-            print(f"Server error: HTTP {response.status_code}")
-        response.close()
+            print(f"✗ Server error: HTTP {response.status_code}")
+            return False
     except Exception as e:
-        print(f"Failed to send data: {e}")
+        print(f"✗ Failed to send data: {e}")
+        return False
+
 
 # --- MAIN LOOP ---
-if connect_to_wifi():
-    while True:
-        moisture = read_soil_moisture()
-        light = read_light_level()
-        print(f"Moisture: {moisture}, Light: {light}")
-        send_data(moisture, light)
-        time.sleep(60)
+print(f"Starting sensor node: {DEVICE_ID}")
+print("Sensors: Soil Moisture + RGB Light Detection")
+
+while True:
+    try:
+        moisture, red, blue, green = read_sensors()
+        
+        print(f"\n--- Sensor Reading ---")
+        print(f"Soil Moisture: {moisture}")
+        print(f"Red Light:     {red}")
+        print(f"Green Light:   {green}")
+        print(f"Blue Light:    {blue}")
+        
+        send_data(moisture, red, blue, green)
+        
+    except Exception as e:
+        print(f"Error: {e}")
+    
+    time.sleep(60)  # Send every 60 seconds
